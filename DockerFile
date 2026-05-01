@@ -7,6 +7,14 @@ WORKDIR /app
 # 3. Install essential system dependencies for audio processing
 RUN apt-get update && apt-get install -y \
     libsndfile1 \
+    libxcb1 \
+    libgl1 \
+    libglib2.0-0 \
+    libx11-6 \
+    libxext6 \
+    libxrender1 \
+    libsm6 \
+    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 # 4. Copy the requirements file into the container
