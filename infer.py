@@ -8,6 +8,11 @@ import noisereduce as nr
 from scipy import signal
 import cv2
 import tensorflow as tf
+import xgboost as xgb
+
+# --- MODEL PIPELINE CHOICE ---
+# Options: "ALEX" (1D AlexNet) or "XG" (SVM Router + XGBoost)
+MODEL_CHOICE = "XG"
 
 TARGET_SR = 48000
 TRIM_TOP_DB = 40
@@ -101,25 +106,51 @@ def main():
         # 2. Load the trained Autoencoder bottleneck (Encoder)
         encoder = tf.keras.models.load_model('encoder_model.h5')
         
-        # 3. Load StandardScaler for AlexNet
-        if os.path.exists('alexnet/scaler_alex.pkl'):
-            with open('alexnet/scaler_alex.pkl', 'rb') as f:
-                scaler_alex = pickle.load(f)
-        elif os.path.exists('scaler_alex.pkl'):
-            with open('scaler_alex.pkl', 'rb') as f:
-                scaler_alex = pickle.load(f)
-        else:
-            print("Warning: scaler_alex.pkl not found! AlexNet inputs won't be scaled correctly.")
-            class DummyScaler:
-                def transform(self, X): return X
-            scaler_alex = DummyScaler()
+        if MODEL_CHOICE == "ALEX":
+            # 3. Load StandardScaler for AlexNet
+            if os.path.exists('alexnet/scaler_alex.pkl'):
+                with open('alexnet/scaler_alex.pkl', 'rb') as f:
+                    scaler_alex = pickle.load(f)
+            elif os.path.exists('scaler_alex.pkl'):
+                with open('scaler_alex.pkl', 'rb') as f:
+                    scaler_alex = pickle.load(f)
+            else:
+                print("Warning: scaler_alex.pkl not found! AlexNet inputs won't be scaled correctly.")
+                class DummyScaler:
+                    def transform(self, X): return X
+                scaler_alex = DummyScaler()
+                
+            # 4. Load the final supervised model (AlexNet 1D)
+            # We pass in custom_objects since it was trained with a custom Focal Loss
+            classifier = tf.keras.models.load_model(
+                'alexnet/tf_alexnet.keras', 
+                custom_objects={'FocalLossTF': FocalLossTF}
+            )
             
-        # 4. Load the final supervised model (AlexNet 1D)
-        # We pass in custom_objects since it was trained with a custom Focal Loss
-        classifier = tf.keras.models.load_model(
-            'alexnet/tf_alexnet.keras', 
-            custom_objects={'FocalLossTF': FocalLossTF}
-        )
+        elif MODEL_CHOICE == "XG":
+            # 3. Load SVM Router
+            if os.path.exists('stage1_svm/best_router.pkl'):
+                with open('stage1_svm/best_router.pkl', 'rb') as f:
+                    svm_router = pickle.load(f)
+            else:
+                print("Warning: stage1_svm/best_router.pkl not found! Falling back to M1.")
+                class DummySVM:
+                    def predict(self, X): return [0]
+                svm_router = DummySVM()
+
+            # 4. Load XGBoost Models (one per machine)
+            xgb_models = {}
+            for i in range(3):
+                model_path = f'stage2_xg/xgb_machine_{i}.pkl'
+                if os.path.exists(model_path):
+                    with open(model_path, 'rb') as f:
+                        xgb_models[i] = pickle.load(f)
+                else:
+                    print(f"Warning: {model_path} not found! Falling back to class 0.")
+                    class DummyXGB:
+                        def predict(self, X): return [0]
+                    xgb_models[i] = DummyXGB()
+
         print("Models loaded successfully.")
     except Exception as e:
         print(f"File not found for model/scaler loading: {e}\nFalling back to Dummy Models for placeholder.")
@@ -168,16 +199,36 @@ def main():
         # 1. Get 256D embedding from encoder
         embedding = encoder.predict(batch_features, verbose=0)
         
-        # 1.5. Apply StandardScaler (Fit earlier on X_cv during Model 4 AlexNet training)
-        try:
-            embedding_scaled = scaler_alex.transform(embedding)
-        except NameError:
-            # Fallback if Dummy Classifier took over
-            embedding_scaled = embedding
-        
-        # 2. Get final class from AlexNet (assuming softmax output across 6 classes)
-        pred_probs = classifier.predict(embedding_scaled, verbose=0)
-        prediction = np.argmax(pred_probs, axis=-1)[0] 
+        # 2. Route and Predict based on chosen pipeline
+        if MODEL_CHOICE == "ALEX":
+            # 2a. Apply StandardScaler (Fit earlier on X_cv during Model 4 AlexNet training)
+            try:
+                embedding_scaled = scaler_alex.transform(embedding)
+            except NameError:
+                embedding_scaled = embedding
+            
+            # Predict final class (AlexNet softmax output)
+            pred_probs = classifier.predict(embedding_scaled, verbose=0)
+            prediction = np.argmax(pred_probs, axis=-1)[0] 
+            
+        elif MODEL_CHOICE == "XG":
+            try:
+                embedding_svm = embedding.astype(np.float64)
+                
+                # Predict Machine (0, 1, or 2) using Router
+                mach_id = svm_router.predict(embedding_svm)[0]
+                
+                # Predict State (0 for Normal, 1 for Abnormal) using XGBoost
+                state_pred = xgb_models[mach_id].predict(embedding_svm)[0]
+                
+                # Combine Machine & State into Final Label (0-5)
+                # Map logic: Machine 1 (0 * 2) + state -> 0 or 1
+                #            Machine 2 (1 * 2) + state -> 2 or 3
+                #            Machine 3 (2 * 2) + state -> 4 or 5
+                prediction = int((mach_id * 2) + state_pred)
+            except Exception as e:
+                # Fallback if Dummy Models took over and failed to index
+                prediction = 0
         
         # =========================================================
         # END TIMER HERE! 
