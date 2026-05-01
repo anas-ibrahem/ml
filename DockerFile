@@ -1,0 +1,22 @@
+# 1. Use an official Python runtime as a parent image
+FROM python:3.9-slim
+
+# 2. Set the working directory inside the container
+WORKDIR /app
+
+# 3. Install essential system dependencies for audio processing
+RUN apt-get update && apt-get install -y \
+    libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# 4. Copy the requirements file into the container
+COPY requirements.txt .
+
+# 5. Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 6. Copy the rest of your project code and model into the container
+COPY . .
+
+# 7. Define the entry point
+ENTRYPOINT ["python", "infer.py"]

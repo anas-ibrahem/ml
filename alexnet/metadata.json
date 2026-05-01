@@ -1,0 +1,15 @@
+{
+  "input_dim": 256,
+  "output_dim": 6,
+  "epochs_trained": 60,
+  "batch_size": 32,
+  "avg_inference_ms": 0.101203,
+  "target_names": [
+    "M1_Norm",
+    "M1_Abn",
+    "M2_Norm",
+    "M2_Abn",
+    "M3_Norm",
+    "M3_Abn"
+  ]
+}

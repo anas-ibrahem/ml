@@ -1,0 +1,11 @@
+librosa
+noisereduce
+scipy
+numpy
+opencv-python
+tensorflow
+scikit-learn
+pandas
+tqdm
+matplotlib
+seaborn
